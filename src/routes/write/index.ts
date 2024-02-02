@@ -14,25 +14,26 @@ interface Params {
     router: Router;
 }
 
-const Write: { reload: (params: Params) => Promise<void>; cleanup: (req?: Request) => void } = {
+const Write = {
     reload: async (params: Params): Promise<void> => {
         const { router } = params;
         let apiSettings: ApiSettings = await meta.settings.get('core.api');
 
         plugins.hooks.register('core', {
             hook: 'action:settings.set',
-            method: async (data: { plugin: string }) => {
+            method: async (data: { plugin: string }): Promise<void> => {
                 if (data.plugin === 'core.api') {
                     apiSettings = await meta.settings.get('core.api');
                 }
             },
         });
 
-        router.use('/api/v3', (req: Request, res: Response, next: NextFunction) => {
+        router.use('/api/v3', (req: Request, res: Response, next: NextFunction): void => {
             // Require https if configured so
             if (apiSettings.requireHttps === 'on' && req.protocol !== 'https') {
                 res.set('Upgrade', 'TLS/1.0, HTTP/1.1');
-                return helpers.formatApiResponse(426, res);
+                helpers.formatApiResponse(426, res);
+                return;
             }
 
             res.locals.isAPI = true;
@@ -68,14 +69,14 @@ const Write: { reload: (params: Params) => Promise<void>; cleanup: (req?: Reques
         router.use('/api/v3/plugins', pluginRouter);
 
         // 404 handling
-        router.use('/api/v3', (req: Request, res: Response) => {
+        router.use('/api/v3', (req: Request, res: Response): void => {
             helpers.formatApiResponse(404, res);
         });
     },
 
     cleanup: (req?: Request): void => {
         if (req && req.session) {
-            req.session.destroy((err: any) => {
+            req.session.destroy((err: any): void => {
                 if (err) {
                     console.error('Error destroying session:', err);
                 }
@@ -84,4 +85,4 @@ const Write: { reload: (params: Params) => Promise<void>; cleanup: (req?: Reques
     },
 };
 
-export = Write;
+export default Write;

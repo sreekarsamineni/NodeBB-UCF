@@ -34,6 +34,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
+Object.defineProperty(exports, "__esModule", { value: true });
 const winston_1 = __importDefault(require("winston"));
 const meta = __importStar(require("../../meta"));
 const plugins = __importStar(require("../../plugins"));
@@ -56,7 +57,8 @@ const Write = {
             // Require https if configured so
             if (apiSettings.requireHttps === 'on' && req.protocol !== 'https') {
                 res.set('Upgrade', 'TLS/1.0, HTTP/1.1');
-                return helpers.formatApiResponse(426, res);
+                helpers.formatApiResponse(426, res);
+                return;
             }
             res.locals.isAPI = true;
             next();
@@ -101,4 +103,4 @@ const Write = {
         }
     },
 };
-module.exports = Write;
+exports.default = Write;
