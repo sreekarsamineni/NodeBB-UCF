@@ -1,5 +1,6 @@
 import winston from 'winston';
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request as ExpressRequest, Response, NextFunction } from 'express';
+import session from 'express-session';
 
 import meta from '../../meta';
 import plugins from '../../plugins';
@@ -11,23 +12,31 @@ import usersRoute from './users';
 import groupsRoute from './groups';
 
 interface WriteParams {
-  router: Router;
+    router: Router;
 }
 
 interface ApiSettings {
-  requireHttps: 'on' | 'off';
+    requireHttps: 'on' | 'off';
+}
+
+// Extend ExpressRequest to include locals property
+interface CustomRequest extends ExpressRequest {
+    session: session.Session | null;
+    locals: {
+        isAPI?: boolean;
+    };
 }
 
 const Write = {
     reload: async (params: WriteParams): Promise<void> => {
         const { router } = params;
-        let apiSettings: ApiSettings = await meta.settings.get('core.api') as ApiSettings;
+        let apiSettings: ApiSettings = (await meta.settings.get('core.api')) as ApiSettings;
 
         plugins.hooks.register('core', {
             hook: 'action:settings.set',
             method: async (data: { plugin: string }) => {
                 if (data.plugin === 'core.api') {
-                    apiSettings = await meta.settings.get('core.api') as ApiSettings;
+                    apiSettings = (await meta.settings.get('core.api')) as ApiSettings;
                 }
             },
         });
@@ -39,7 +48,7 @@ const Write = {
                     await helpers.formatApiResponse(426, res);
                     return;
                 }
-                res.locals.isAPI = true;
+                (req as CustomRequest).locals.isAPI = true;
             };
 
             handleAsync()
@@ -62,13 +71,14 @@ const Write = {
         router.use('/api/v3/plugins', pluginRouter);
 
         router.use('/api/v3', (req, res, next) => {
-            helpers.formatApiResponse(404, res)
+            helpers
+                .formatApiResponse(404, res)
                 .then(() => next())
                 .catch(error => next(error));
         });
     },
 
-    cleanup: (req: Request, res: Response, next: NextFunction): void => {
+    cleanup: (req: CustomRequest, res: Response, next: NextFunction): void => {
         if (req.session) {
             req.session.destroy((err) => {
                 if (err) {
@@ -85,4 +95,3 @@ const Write = {
 };
 
 export default Write;
-
