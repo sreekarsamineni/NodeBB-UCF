@@ -1,143 +1,167 @@
-'use strict';
+import * as path from 'path';
+import * as nconf from 'nconf';
 
-// hskadjsndjkdbnka
-// test
-/**
- * The middlewares here strictly act to "assert" validity of the incoming
- * payload and throw an error otherwise.
- */
+import { NextFunction } from 'express';
+import * as file from '../file';
+import * as user from '../user';
+import * as groups from '../groups';
+import * as topics from '../topics';
+import * as posts from '../posts';
+import * as messaging from '../messaging';
+import * as flags from '../flags';
+import * as slugify from '../slugify';
 
-const path = require('path');
-const nconf = require('nconf');
+import * as helpers from './helpers';
+import * as controllerHelpers from '../controllers/helpers';
 
-const file = require('../file');
-const user = require('../user');
-const groups = require('../groups');
-const topics = require('../topics');
-const posts = require('../posts');
-const messaging = require('../messaging');
-const flags = require('../flags');
-const slugify = require('../slugify');
+interface CustomRequest {
+    params: { [key: string]: string };
+    body: CustomRequestBody;
+    uid?: string;
+}
 
-const helpers = require('./helpers');
-const controllerHelpers = require('../controllers/helpers');
+interface CustomRequestBody {
+    folderName?: string;
+    path?: string;
+}
 
-const Assert = module.exports;
+interface CustomResponse {
+    locals: {
+        cleanedPath?: string;
+        folderPath?: string;
+    };
+    status: (status: number) => CustomResponse;
+    json: (body: string) => void;
+}
 
-Assert.user = helpers.try(async (req, res, next) => {
-    if (!await user.exists(req.params.uid)) {
-        return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-user]]'));
-    }
+// type NextFunction = (error?: unknown) => void;
 
-    next();
-});
+const Assert = {
+    user: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        if (!await user.exists(req.params.uid)) {
+            return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-user]]'));
+        }
+        next();
+    }),
 
-Assert.group = helpers.try(async (req, res, next) => {
-    const name = await groups.getGroupNameByGroupSlug(req.params.slug);
-    if (!name || !await groups.exists(name)) {
-        return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-group]]'));
-    }
+    group: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        const name = await groups.getGroupNameByGroupSlug(req.params.slug) as string | null;
+        if (!name || !await groups.exists(name)) {
+            return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-group]]'));
+        }
+        next();
+    }),
 
-    next();
-});
+    topic: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        if (!await topics.exists(req.params.tid)) {
+            return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-topic]]'));
+        }
+        next();
+    }),
 
-Assert.topic = helpers.try(async (req, res, next) => {
-    if (!await topics.exists(req.params.tid)) {
-        return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-topic]]'));
-    }
+    post: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        if (!await posts.exists(req.params.pid)) {
+            return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-post]]'));
+        }
+        next();
+    }),
 
-    next();
-});
+    flag: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        const canView = await flags.canView(req.params.flagId, req.uid) as boolean;
 
-Assert.post = helpers.try(async (req, res, next) => {
-    if (!await posts.exists(req.params.pid)) {
-        return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-post]]'));
-    }
+        if (!canView) {
+            return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-flag]]'));
+        }
 
-    next();
-});
+        next();
+    }),
 
-Assert.flag = helpers.try(async (req, res, next) => {
-    const canView = await flags.canView(req.params.flagId, req.uid);
-    if (!canView) {
-        return controllerHelpers.formatApiResponse(404, res, new Error('[[error:no-flag]]'));
-    }
+    path: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        let filePath = req.body.path;
 
-    next();
-});
+        // file: URL support
+        if (filePath.startsWith('file:///')) {
+            filePath = new URL(filePath).pathname;
+        }
 
-Assert.path = helpers.try(async (req, res, next) => {
-    // file: URL support
-    if (req.body.path.startsWith('file:///')) {
-        req.body.path = new URL(req.body.path).pathname;
-    }
+        const uploadUrl = nconf.get('upload_url') as string;
+        if (filePath.startsWith(uploadUrl)) {
+            filePath = filePath.slice(uploadUrl.length);
+        }
 
-    // Strip upload_url if found
-    if (req.body.path.startsWith(nconf.get('upload_url'))) {
-        req.body.path = req.body.path.slice(nconf.get('upload_url').length);
-    }
+        const uploadPath = nconf.get('upload_path') as string;
+        const pathToFile = path.join(uploadPath, filePath);
+        res.locals.cleanedPath = pathToFile;
 
-    const pathToFile = path.join(nconf.get('upload_path'), req.body.path);
-    res.locals.cleanedPath = pathToFile;
+        if (!pathToFile.startsWith(uploadPath)) {
+            return controllerHelpers.formatApiResponse(403, res, new Error('[[error:invalid-path]]'));
+        }
 
-    // Guard against path traversal
-    if (!pathToFile.startsWith(nconf.get('upload_path'))) {
-        return controllerHelpers.formatApiResponse(403, res, new Error('[[error:invalid-path]]'));
-    }
+        if (!await file.exists(pathToFile)) {
+            return controllerHelpers.formatApiResponse(404, res, new Error('[[error:invalid-path]]'));
+        }
 
-    if (!await file.exists(pathToFile)) {
-        return controllerHelpers.formatApiResponse(404, res, new Error('[[error:invalid-path]]'));
-    }
+        next();
+    }),
 
-    next();
-});
+    folderName: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        const { body } = req;
+        const folderName = slugify(path.basename(body.folderName?.trim() ?? '')) as string;
 
-Assert.folderName = helpers.try(async (req, res, next) => {
-    const folderName = slugify(path.basename(req.body.folderName.trim()));
-    const folderPath = path.join(res.locals.cleanedPath, folderName);
+        if (!folderName) {
+            return controllerHelpers.formatApiResponse(403, res, new Error('[[error:invalid-path]]'));
+        }
 
-    // slugify removes invalid characters, folderName may become empty
-    if (!folderName) {
-        return controllerHelpers.formatApiResponse(403, res, new Error('[[error:invalid-path]]'));
-    }
-    if (await file.exists(folderPath)) {
-        return controllerHelpers.formatApiResponse(403, res, new Error('[[error:folder-exists]]'));
-    }
+        if (!res.locals.cleanedPath) {
+            return controllerHelpers.formatApiResponse(500, res, new Error('Server configuration error'));
+        }
 
-    res.locals.folderPath = folderPath;
+        const folderPath = path.join(res.locals.cleanedPath, folderName);
 
-    next();
-});
+        if (await file.exists(folderPath)) {
+            return controllerHelpers.formatApiResponse(403, res, new Error('[[error:folder-exists]]'));
+        }
 
-Assert.room = helpers.try(async (req, res, next) => {
-    if (!isFinite(req.params.roomId)) {
-        return controllerHelpers.formatApiResponse(400, res, new Error('[[error:invalid-data]]'));
-    }
+        res.locals.folderPath = folderPath;
 
-    const [exists, inRoom] = await Promise.all([
-        await messaging.roomExists(req.params.roomId),
-        await messaging.isUserInRoom(req.uid, req.params.roomId),
-    ]);
+        next();
+    }),
 
-    if (!exists) {
-        return controllerHelpers.formatApiResponse(404, res, new Error('[[error:chat-room-does-not-exist]]'));
-    }
+    room: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        const roomId = parseInt(req.params.roomId, 10);
 
-    if (!inRoom) {
-        return controllerHelpers.formatApiResponse(403, res, new Error('[[error:no-privileges]]'));
-    }
+        if (!isFinite(roomId)) {
+            return controllerHelpers.formatApiResponse(400, res, new Error('[[error:invalid-data]]'));
+        }
+        const roomExistsFunction = messaging.roomExists as unknown as (roomId: number) => Promise<boolean>;
+        const isUserInRoomFunction: (uid: string, roomId: number) => Promise<boolean> =
+            messaging.isUserInRoom as unknown as (uid: string, roomId: number) => Promise<boolean>;
+        const [exists, inRoom] = await Promise.all([
+            roomExistsFunction(roomId),
+            isUserInRoomFunction(req.uid, roomId),
+        ]);
 
-    next();
-});
+        if (!exists) {
+            return controllerHelpers.formatApiResponse(404, res, new Error('[[error:chat-room-does-not-exist]]'));
+        }
 
-Assert.message = helpers.try(async (req, res, next) => {
-    if (
-        !isFinite(req.params.mid) ||
-        !(await messaging.messageExists(req.params.mid)) ||
-        !(await messaging.canViewMessage(req.params.mid, req.params.roomId, req.uid))
-    ) {
-        return controllerHelpers.formatApiResponse(400, res, new Error('[[error:invalid-mid]]'));
-    }
+        if (!inRoom) {
+            return controllerHelpers.formatApiResponse(403, res, new Error('[[error:no-privileges]]'));
+        }
 
-    next();
-});
+        next();
+    }),
+
+    message: helpers.try(async (req: CustomRequest, res: CustomResponse, next: NextFunction) => {
+        const messageId = parseInt(req.params.mid, 10);
+
+        if (!isFinite(messageId) ||
+            !(await messaging.messageExists(messageId)) ||
+            !(await messaging.canViewMessage(messageId, req.params.roomId, req.uid))) {
+            return controllerHelpers.formatApiResponse(400, res, new Error('[[error:invalid-mid]]'));
+        }
+
+        next();
+    }),
+};
+export = Assert;
