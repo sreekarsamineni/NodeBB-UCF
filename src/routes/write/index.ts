@@ -1,73 +1,88 @@
-'use strict';
+import winston from 'winston';
+import { Router, Request, Response, NextFunction } from 'express';
 
-const winston = require('winston');
-const meta = require('../../meta');
-const plugins = require('../../plugins');
-const middleware = require('../../middleware');
-const writeControllers = require('../../controllers/write');
-const helpers = require('../../controllers/helpers');
+import meta from '../../meta';
+import plugins from '../../plugins';
+import middleware from '../../middleware';
+import writeControllers from '../../controllers/write';
+import helpers from '../../controllers/helpers';
 
-const Write = module.exports;
+import usersRoute from './users';
+import groupsRoute from './groups';
 
-Write.reload = async (params) => {
-    const { router } = params;
-    let apiSettings = await meta.settings.get('core.api');
-    plugins.hooks.register('core', {
-        hook: 'action:settings.set',
-        method: async (data) => {
-            if (data.plugin === 'core.api') {
-                apiSettings = await meta.settings.get('core.api');
-            }
-        },
-    });
+interface WriteParams {
+  router: Router;
+}
 
-    router.use('/api/v3', (req, res, next) => {
-        // Require https if configured so
-        if (apiSettings.requireHttps === 'on' && req.protocol !== 'https') {
-            res.set('Upgrade', 'TLS/1.0, HTTP/1.1');
-            return helpers.formatApiResponse(426, res);
+interface ApiSettings {
+  requireHttps: 'on' | 'off';
+}
+
+const Write = {
+    reload: async (params: WriteParams): Promise<void> => {
+        const { router } = params;
+        let apiSettings: ApiSettings = await meta.settings.get('core.api') as ApiSettings;
+
+        plugins.hooks.register('core', {
+            hook: 'action:settings.set',
+            method: async (data: { plugin: string }) => {
+                if (data.plugin === 'core.api') {
+                    apiSettings = await meta.settings.get('core.api') as ApiSettings;
+                }
+            },
+        });
+
+        router.use('/api/v3', (req, res, next) => {
+            const handleAsync = async () => {
+                if (apiSettings.requireHttps === 'on' && req.protocol !== 'https') {
+                    res.set('Upgrade', 'TLS/1.0, HTTP/1.1');
+                    await helpers.formatApiResponse(426, res);
+                    return;
+                }
+                res.locals.isAPI = true;
+            };
+
+            handleAsync()
+                .then(() => next())
+                .catch(error => next(error));
+        });
+
+        router.use('/api/v3/users', usersRoute());
+        router.use('/api/v3/groups', groupsRoute());
+        router.get('/api/v3/ping', writeControllers.utilities.ping.get);
+
+        const pluginRouter = Router();
+        await plugins.hooks.fire('static:api.routes', {
+            router: pluginRouter,
+            middleware,
+            helpers,
+        });
+
+        winston.info(`[api] Adding ${pluginRouter.stack.length} route(s) to \`api/v3/plugins\``);
+        router.use('/api/v3/plugins', pluginRouter);
+
+        router.use('/api/v3', (req, res, next) => {
+            helpers.formatApiResponse(404, res)
+                .then(() => next())
+                .catch(error => next(error));
+        });
+    },
+
+    cleanup: (req: Request, res: Response, next: NextFunction): void => {
+        if (req.session) {
+            req.session.destroy((err) => {
+                if (err) {
+                    console.error(err);
+                    next(err);
+                } else {
+                    next();
+                }
+            });
+        } else {
+            next();
         }
-
-        res.locals.isAPI = true;
-        next();
-    });
-
-    router.use('/api/v3/users', require('./users')());
-    router.use('/api/v3/groups', require('./groups')());
-    router.use('/api/v3/categories', require('./categories')());
-    router.use('/api/v3/topics', require('./topics')());
-    router.use('/api/v3/posts', require('./posts')());
-    router.use('/api/v3/chats', require('./chats')());
-    router.use('/api/v3/flags', require('./flags')());
-    router.use('/api/v3/admin', require('./admin')());
-    router.use('/api/v3/files', require('./files')());
-    router.use('/api/v3/utilities', require('./utilities')());
-
-    router.get('/api/v3/ping', writeControllers.utilities.ping.get);
-    router.post('/api/v3/ping', middleware.authenticateRequest, middleware.ensureLoggedIn, writeControllers.utilities.ping.post);
-
-    /**
-     * Plugins can add routes to the Write API by attaching a listener to the
-     * below hook. The hooks added to the passed-in router will be mounted to
-     * `/api/v3/plugins`.
-     */
-    const pluginRouter = require('express').Router();
-    await plugins.hooks.fire('static:api.routes', {
-        router: pluginRouter,
-        middleware,
-        helpers,
-    });
-    winston.info(`[api] Adding ${pluginRouter.stack.length} route(s) to \`api/v3/plugins\``);
-    router.use('/api/v3/plugins', pluginRouter);
-
-    // 404 handling
-    router.use('/api/v3', (req, res) => {
-        helpers.formatApiResponse(404, res);
-    });
+    },
 };
 
-Write.cleanup = (req) => {
-    if (req && req.session) {
-        req.session.destroy();
-    }
-};
+export default Write;
+
